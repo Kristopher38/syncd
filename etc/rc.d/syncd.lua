@@ -1,13 +1,12 @@
 local serialization = require("serialization")
-local event = require('event')
+local event = require("event")
 local fs = require("filesystem")
 local component = require("component")
-local inspect = require('lib.inspect')
-local cbor = require('lib.cbor')
-local event = require('event')
-local stemBackend = require("backends.stem")
-local xxh64 = require('lib.xxh64')
-local syslog = require('syslog')
+local inspect = require("inspect")
+local cbor = require("cbor")
+local xxh64 = require("xxh64")
+local syslog = require("syslog")
+local stemBackend = require("syncd.backends.stem")
 
 local log = {}
 for levelName, levelValue in pairs(syslog) do
