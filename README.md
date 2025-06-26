@@ -49,3 +49,12 @@ rc syncd restart
 ```
 
 At this point files and directories created locally should show up on your OC computer.
+
+### Acknowledgements
+
+This project wouldn’t have been possible without the work of these awesome people and their projects. Special thanks to:
+- **UnicornFreedom** for creating [STEM](https://gitlab.com/UnicornFreedom/stem) and hosting a [STEM instance](https://stem.fomalhaut.me)
+- **Izaya** for developing [syslogd](https://github.com/ShadowKatStudios/OC-Minitel/tree/master/syslog/OpenOS)
+- **lunaboards-dev** for the [lua-xxh64](https://github.com/lunaboards-dev/lua-xxh64) implementation
+- **Zash** for the [lua-cbor](https://github.com/Zash/lua-cbor) library
+- **notify-rs contributors** for maintaining [notify](https://github.com/notify-rs/notify)
