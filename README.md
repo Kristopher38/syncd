@@ -10,12 +10,15 @@ Filesystem watcher and rc.d script connect to each other through a [STEM bridge]
 
 ## Setup
 
-On your local machine the hardcoded synchronized directory is `watchdir` and it has to exist.
+### Local machine
+
+On your local machine run the filesystem watcher specifying the synchronized directory and channel (this should be a hard-to-guess string that you will input on the OC side to pair it with local PC side). A synchronized directory has to exist.
 
 ```
-mkdir watchdir
-cargo run
+cargo run -- --channel your_unique_string --syncdir your_dir
 ```
+
+### Opencomputers machine
 
 On your OC computer you need OpenOS and OPPM installed.
 
@@ -33,17 +36,16 @@ rc syncd start
 
 This will create a config file under `/etc/syncd.cfg`.
 It contains the following options:
-- `channel` - unique name that needs to be configured to the same string for both sides to sync files. Currently has to be `"default_channel"`.
+- `channel` - unique name that you entered earlier when running `cargo run`, needs to be configured to the same string for both sides to sync files.
+- `syncedDir` - Path to directory where synced files will be stored in. Must be an absolute path. Default is `"/home/default_dir"`.
 - `address` - address of a STEM server to connect to. Default is `"stem.fomalhaut.me:5733"`.
 - `backend` - backend used for connection. Currently only support STEM. Default is `"stem"`.
 - `backendOps` - extra parameters to pass to the backend. Default is `{}`.
-- `syncedDir` - Path to directory where synced files will be stored in. Must be an absolute path. Default is `"/home/default_dir"`.
 
-You should adjust `syncedDir` accordingly and restart the service:
+You should adjust `channel` and `syncedDir` accordingly and restart the service:
 
 ```
 rc syncd restart
 ```
 
 At this point files and directories created locally should show up on your OC computer.
-

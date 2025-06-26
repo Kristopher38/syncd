@@ -6,7 +6,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, Event, EventKin
 use notify::event::{ModifyKind::*, CreateKind::*, RenameMode::*};
 use tokio::runtime::Builder;
 use tokio_util::codec::Framed;
-use tokio_util::bytes::{BytesMut, BufMut};
+use tokio_util::bytes::BytesMut;
 use futures::{SinkExt, StreamExt};
 use serde::{Serialize, Deserialize};
 use ciborium;
@@ -17,9 +17,21 @@ use std::fs::FileType;
 use serde_with::{serde_as, Bytes};
 use path_clean::PathClean;
 use std::env;
+use clap::Parser;
 
 mod codec;
 use crate::codec::{Codec, Package};
+
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    #[arg(long, default_value = "stem.fomalhaut.me:5733")]
+    address: String,
+    #[arg(long)]
+    channel: String,
+    #[arg(long, default_value = ".")]
+    syncdir: PathBuf,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum EntityType {
@@ -80,14 +92,13 @@ fn list_path(path: &Path) -> Vec<(PathBuf, FileType)> {
     paths
 }
 
-fn handle_message(message: Protocol) -> Option<Protocol> {
-    let watchdir = Path::new("watchdir");
+fn handle_message(message: Protocol, syncdir: &Path) -> Option<Protocol> {
     match message {
         Protocol::Ping => Some(Protocol::Pong),
         Protocol::List {path} => {
             println!("path is {}", path.display());
-            let watchpath = watchdir.join(&path).clean();
-            if path_escapes_dir(&watchpath, watchdir) {
+            let watchpath = syncdir.join(&path).clean();
+            if path_escapes_dir(&watchpath, syncdir) {
                 return None
             }
             let paths = list_path(watchpath.as_ref());
@@ -102,7 +113,7 @@ fn handle_message(message: Protocol) -> Option<Protocol> {
                 } else {
                     EntityType::File
                 };
-                let strippath = listpath.strip_prefix(&watchdir).expect("Path does not contain watchdir prefix");
+                let strippath = listpath.strip_prefix(&syncdir).expect("Path does not contain syncdir prefix");
                 println!("Returning path {}", strippath.display());
                 entries.push(ListRespEntry {
                     path: strippath.to_path_buf(),
@@ -113,8 +124,8 @@ fn handle_message(message: Protocol) -> Option<Protocol> {
             Some(Protocol::ListResp{entries: entries})
         },
         Protocol::Get {path} => {
-            let watchpath = watchdir.join(&path).clean();
-            if path_escapes_dir(&watchpath, watchdir) {
+            let watchpath = syncdir.join(&path).clean();
+            if path_escapes_dir(&watchpath, syncdir) {
                 println!("Path escapes {}", watchpath.display());
                 return None
             }
@@ -130,11 +141,10 @@ fn handle_message(message: Protocol) -> Option<Protocol> {
     }
 }
 
-fn handle_fs_event(event: Event) -> Option<Protocol> {
-    let watchdir = env::current_dir().expect("Failed getting cwd").join("watchdir");
-    let path: PathBuf = event.paths[0].to_path_buf();
-    let path_to = event.paths.get(1);
-    let strippath = path.strip_prefix(&watchdir).expect("Path does not contain watchdir prefix").to_path_buf();
+fn handle_fs_event(event: Event, syncdir: &Path) -> Option<Protocol> {
+    let fullpath = env::current_dir().expect("Failed getting cwd").join(syncdir);
+    let path = &event.paths[0];
+    let strippath = path.strip_prefix(&fullpath).expect("Path escapes watched directory").to_path_buf();
 
     println!("FS event, path {}, stripped path {}", path.display(), strippath.display());
     match event.kind {
@@ -142,7 +152,8 @@ fn handle_fs_event(event: Event) -> Option<Protocol> {
         EventKind::Create(Folder) => Some(Protocol::FsEventCreate{path: strippath, entity: EntityType::Directory}),
         EventKind::Modify(Data(_)) => Some(Protocol::FsEventModify{hash: hash_file(path.as_ref()), path: strippath}), 
         EventKind::Modify(Name(Both)) => {
-            let strippath_to = path_to?.strip_prefix(&watchdir).expect("Path does not contain watchdir prefix").to_path_buf();    
+            let path_to = &event.paths[1];
+            let strippath_to = path_to.strip_prefix(&fullpath).expect("Target path escapes watched directory").to_path_buf();
             Some(Protocol::FsEventRename{path_from: strippath, path_to: strippath_to})
         }
         EventKind::Remove(_) => Some(Protocol::FsEventDelete{path: strippath}),
@@ -150,13 +161,11 @@ fn handle_fs_event(event: Event) -> Option<Protocol> {
     }
 }
 
-async fn tcp_handler<'a>(addr: &str, mut rx_watcher: mpsc::Receiver<Event>) {
+async fn event_handler<'a>(addr: String, syncdir: PathBuf, channel: String, mut rx_watcher: mpsc::Receiver<Event>) {
     let conn = TcpStream::connect(addr).await.unwrap();
     let mut framed_conn = Framed::new(conn, Codec);
 
-    let mut chan = BytesMut::with_capacity(64);
-    chan.put("default_channel".as_ref());
-
+    let chan = BytesMut::from(channel.as_str());
     let _ = framed_conn.send(Package::Subscribe(chan.clone())).await;
 
     while let true = tokio::select! {
@@ -168,7 +177,7 @@ async fn tcp_handler<'a>(addr: &str, mut rx_watcher: mpsc::Receiver<Event>) {
                 }
                 Ok(Package::Message(channel, payload)) => {
                     let deserialized: Protocol = ciborium::de::from_reader(payload.as_ref()).unwrap();
-                    if let Some(response) = handle_message(deserialized) {
+                    if let Some(response) = handle_message(deserialized, syncdir.as_path()) {
                         let mut msg = Vec::new();
                         let _ = ciborium::ser::into_writer(&response, &mut msg);
                         let _ = framed_conn.send(Package::Message(channel, BytesMut::from(msg.as_slice()))).await;
@@ -183,7 +192,7 @@ async fn tcp_handler<'a>(addr: &str, mut rx_watcher: mpsc::Receiver<Event>) {
             true
         }
         Some(event) = rx_watcher.recv() => {
-            if let Some(response) = handle_fs_event(event) {
+            if let Some(response) = handle_fs_event(event, syncdir.as_path()) {
                 let mut serialized = Vec::new();
                 let _ = ciborium::ser::into_writer(&response, &mut serialized);
                 let _ = framed_conn.send(Package::Message(chan.clone(), BytesMut::from(serialized.as_slice()))).await;
@@ -197,6 +206,7 @@ async fn tcp_handler<'a>(addr: &str, mut rx_watcher: mpsc::Receiver<Event>) {
 }
 
 fn main() {
+    let args = Args::parse();
     let rt = Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -208,9 +218,14 @@ fn main() {
         let _ = tx.blocking_send(res.unwrap());
     }, Config::default()).unwrap();
     
-    watcher.watch(Path::new("./watchdir"), RecursiveMode::Recursive).unwrap();
+    watcher.watch(&args.syncdir, RecursiveMode::Recursive).unwrap();
 
-    let handle = rt.spawn(tcp_handler("stem.fomalhaut.me:5733", rx));
+    let handle = rt.spawn(event_handler(
+        args.address.clone(),
+        args.syncdir.clone(),
+        args.channel.clone(),
+        rx
+    ));
     
     let _ = rt.block_on(handle);
 }
