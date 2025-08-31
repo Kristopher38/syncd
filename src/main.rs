@@ -167,6 +167,7 @@ async fn event_handler<'a>(addr: String, syncdir: PathBuf, channel: String, mut 
 
     let chan = BytesMut::from(channel.as_str());
     let _ = framed_conn.send(Package::Subscribe(chan.clone())).await;
+    let _ = framed_conn.send(Package::Ping(chan.clone())).await;
 
     while let true = tokio::select! {
         Some(result) = framed_conn.next() => {

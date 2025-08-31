@@ -260,7 +260,11 @@ end
 
 function syncd:_listener(channel, rawMsg)
     if channel == self._channel then
-        local msg = cbor.decode(rawMsg)
+        local ok, msg = pcall(cbor.decode, rawMsg)
+        if not ok then
+            log.error("Decoding message failed: %s", msg)
+            return
+        end
         log.debug("Received %s message:\n%s", msg.type, inspect(msg))
         if self.handlers[msg.type] then
             local ok, err = pcall(self.handlers[msg.type], self, msg)
@@ -340,6 +344,7 @@ local function getConfig()
 end
 
 local inst
+local timer
 
 function start()
     if not component.isAvailable("internet") then
@@ -356,7 +361,7 @@ function start()
     end
 
     -- try to ping every 2 seconds
-    event.timer(2, function()
+    timer = event.timer(2, function()
         if not inst:commsEstablished() then
             inst:ping()
             return true
@@ -370,4 +375,5 @@ end
 
 function stop()
     inst:disconnect()
+    event.cancel(timer)
 end
